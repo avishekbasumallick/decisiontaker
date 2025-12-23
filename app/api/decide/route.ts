@@ -86,8 +86,13 @@ export async function POST(req: Request) {
       
       Instructions:
       1. You MUST select exactly one option from the provided list.
-      2. You MUST base your reasoning ONLY on the "CONTEXT FROM LIBRARY" provided above.
-      3. Return valid JSON only.
+      2. "recommendation": The text of the option you selected.
+      3. "short_reason": A concise summary (Maximum 2 sentences) explaining the choice.
+      4. "detailed_reasoning": A comprehensive analysis (Minimum 150 words).
+         - You MUST explicitly name the Mental Models or Frameworks used from the context (e.g., **WRAP Framework**, **Second-Order Thinking**).
+         - Use Markdown bolding (**) to highlight these framework names.
+         - Explain how the specific context applies to the user's problem.
+      5. Return valid JSON only.
       
       {format_instructions}
     `);

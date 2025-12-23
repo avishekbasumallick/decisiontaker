@@ -67,7 +67,7 @@ export default function DecisionTool() {
       <div className="max-w-2xl mx-auto space-y-8">
         <div className="text-center">
           <h1 className="text-3xl font-extrabold text-gray-900">✨ Decision Engine</h1>
-          <p className="mt-2 text-gray-600">AI-powered decision analysis backed by your knowledge base</p>
+          <p className="mt-2 text-gray-600">Decision analysis backed by a RAG knowledge base comprising the best material available on decision taking</p>
         </div>
 
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
