@@ -10,6 +10,35 @@ const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const GROQ_KEY = process.env.GROQ_API_KEY;
 const HF_TOKEN = process.env.HUGGINGFACEHUB_API_TOKEN;
 
+// Function to sanitize input strings by removing non-printable control characters
+function sanitizeInput(text: string): string {
+  return text.replace(/[\x00-\x1F\x7F]/g, '');
+}
+
+// Function to clean potentially malformed JSON output from the LLM
+function cleanJsonOutput(text: string): string {
+  let cleaned = text;
+
+  // 1. Try to extract JSON from a markdown code block if present
+  const jsonMatch = cleaned.match(/```json\n([\s\S]*?)\n```/);
+  if (jsonMatch && jsonMatch[1]) {
+    cleaned = jsonMatch[1];
+  }
+
+  // 2. Remove any remaining non-printable control characters
+  cleaned = cleaned.replace(/[\x00-\x1F\x7F]/g, '');
+
+  // 3. Attempt to fix common unescaped characters within JSON string values
+  // This is a heuristic to escape unescaped newlines, carriage returns, and tabs inside string values.
+  // The regex looks for a double quote, then any characters (non-greedy),
+  // then an unescaped control character, then any characters (non-greedy), then a double quote.
+  cleaned = cleaned.replace(/(".*?[^\\])\n(.*?")/gs, '$1\\\\n$2');
+  cleaned = cleaned.replace(/(".*?[^\\])\r(.*?")/gs, '$1\\\\r$2');
+  cleaned = cleaned.replace(/(".*?[^\\])\t(.*?")/gs, '$1\\\\t$2');
+
+  return cleaned;
+}
+
 export async function POST(req: Request) {
   console.log("--------------- STRICT RAG REQUEST STARTED ---------------");
   
@@ -18,7 +47,11 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { problem, options } = await req.json();
+    const { problem: rawProblem, options: rawOptions } = await req.json();
+
+    // Sanitize user inputs before sending to the LLM
+    const problem = sanitizeInput(rawProblem);
+    const options = rawOptions.map((opt: string) => sanitizeInput(opt));
 
     // --- STEP 1: EMBEDDING ---
     console.log("🧠 Generating Embedding...");
@@ -39,7 +72,6 @@ export async function POST(req: Request) {
     console.log("🔍 Searching Knowledge Base...");
     const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
     
-    // Use the corrected function with 'documents.' prefix
     const { data: documents, error } = await supabase.rpc('match_documents', {
       query_embedding: vector,
       match_threshold: 0.1, 
@@ -69,10 +101,11 @@ export async function POST(req: Request) {
     
     const model = new ChatGroq({
       apiKey: GROQ_KEY,
-      model: "llama-3.1-8b-instant", // ✅ UPDATED: The new, valid model name
+      model: "llama-3.1-8b-instant",
       temperature: 0.1, 
     });
 
+    // Use JsonOutputParser to get format instructions for the prompt
     const parser = new JsonOutputParser();
 
     const prompt = PromptTemplate.fromTemplate(`
@@ -97,14 +130,37 @@ export async function POST(req: Request) {
       {format_instructions}
     `);
 
-    const chain = RunnableSequence.from([prompt, model, parser]);
+    // Create a chain that gets the raw AI message content
+    const chain = RunnableSequence.from([prompt, model]);
 
-    const result = await chain.invoke({
+    const rawAiResponse = await chain.invoke({
       context: contextText,
       problem: problem,
       options: options.join(", "),
       format_instructions: parser.getFormatInstructions(),
     });
+
+    let result;
+    const rawOutputString = rawAiResponse.content; // Extract the string content from the AI message
+
+    // Attempt to parse the JSON, with a fallback to clean and re-parse
+    try {
+      result = JSON.parse(rawOutputString);
+    } catch (parseError) {
+      console.warn("Initial JSON parse failed, attempting repair...", parseError);
+      const cleanedOutput = cleanJsonOutput(rawOutputString);
+      try {
+        result = JSON.parse(cleanedOutput);
+      } catch (repairError) {
+        console.error("JSON repair also failed:", repairError);
+        // If repair fails, return an error response
+        return Response.json({
+          recommendation: "Analysis failed.",
+          short_reason: "Could not parse AI response due to malformed JSON.",
+          detailed_reasoning: `The AI generated an unparseable response. Original parsing error: ${parseError}. Repair attempt error: ${repairError}. Raw output: ${rawOutputString}`
+        }, { status: 500 });
+      }
+    }
 
     console.log("✅ Success! Sending response.");
     return Response.json(result);
