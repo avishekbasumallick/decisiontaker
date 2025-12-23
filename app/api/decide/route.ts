@@ -2,21 +2,26 @@ import { createClient } from '@supabase/supabase-js';
 import { ChatGroq } from "@langchain/groq";
 import { HuggingFaceInferenceEmbeddings } from "@langchain/community/embeddings/hf";
 import { PromptTemplate } from "@langchain/core/prompts";
-import { RunnableSequence } from "@langchain/core/runnables";
 
-// --- HELPER: Clean JSON Output (Fixes Bad Control Characters) ---
+// --- HELPER: ROBUST JSON EXTRACTION ---
 function cleanJsonOutput(text: string): string {
-  // 1. Remove Markdown code blocks (```json ... ```)
-  let clean = text.replace(/```json\s*/g, "").replace(/```\s*$/g, "");
-  // 2. Escape unescaped newlines inside the JSON string
-  clean = clean.replace(/\n/g, "\\n");
-  // 3. Remove non-printable control characters (except common ones)
-  clean = clean.replace(/[\x00-\x1F\x7F]/g, (match) => {
-    return match === "\n" || match === "\r" || match === "\t" ? match : "";
-  });
-  return clean.trim();
+  try {
+    // 1. Find the first '{' and the last '}'
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    
+    // If we found brackets, extract just that part
+    if (start !== -1 && end !== -1) {
+      return text.substring(start, end + 1);
+    }
+    
+    // Fallback: Return original text if no brackets found (will likely fail parse, but we tried)
+    return text;
+  } catch (e) {
+    return text;
+  }
 }
-// ----------------------------------------------------------------
+// --------------------------------------
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -31,7 +36,7 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
     
-    // 1. Sanitize Inputs (Remove weird invisible characters from user input)
+    // Sanitize Inputs
     const problem = (body.problem || "").replace(/[\x00-\x1F\x7F]/g, "");
     const options = (body.options || []).map((o: string) => o.replace(/[\x00-\x1F\x7F]/g, ""));
 
@@ -98,10 +103,9 @@ export async function POST(req: Request) {
       4. "detailed_reasoning": A comprehensive analysis (Minimum 150 words).
          - You MUST explicitly name the Mental Models used (e.g. **WRAP Framework**).
          - Use Markdown bolding (**text**) to highlight frameworks.
-      5. Return valid JSON only. Do not add markdown formatting like \`\`\`json.
+      5. Return valid JSON only. NO PREAMBLE. NO MARKDOWN. JUST THE JSON OBJECT.
     `);
 
-    // We manually invoke the model to get the RAW string, so we can clean it
     const formattedPrompt = await prompt.format({
       context: contextText,
       problem: problem,
@@ -109,25 +113,19 @@ export async function POST(req: Request) {
     });
 
     const response = await model.invoke(formattedPrompt);
-    
-    // --- THE TYPESCRIPT FIX IS HERE ---
-    // We force cast content to 'string' because we know Llama 3 returns text
     const rawOutputString = response.content as string; 
     
-    // --- CLEAN & PARSE JSON ---
+    // --- ROBUST CLEAN & PARSE ---
     let result;
     try {
-      // Try strict parse first
-      result = JSON.parse(rawOutputString);
-    } catch (e) {
-      console.log("⚠️ Strict parse failed. Attempting to sanitize JSON...");
+      // 1. Extract just the JSON part { ... }
       const cleanString = cleanJsonOutput(rawOutputString);
-      try {
-        result = JSON.parse(cleanString);
-      } catch (e2) {
-        console.error("❌ JSON Parse completely failed:", rawOutputString);
-        throw new Error("AI returned invalid JSON format.");
-      }
+      
+      // 2. Parse it
+      result = JSON.parse(cleanString);
+    } catch (e) {
+      console.error("❌ JSON Parse Failed on output:", rawOutputString);
+      throw new Error("AI returned invalid JSON format.");
     }
 
     return Response.json(result);
