@@ -120,7 +120,8 @@ export async function POST(req: Request) {
       3. "short_reason": 2 sentences max.
       4. "detailed_reasoning": A structured analysis (Min 150 words).
          - Identify specific mental models found in the context.
-         - USE PARAGRAPHS to separate ideas.
+         - Do NOT force a framework if it is not in the context.
+         - 
       5. CRITICAL JSON RULES:
          - Return valid JSON only.
          - Use standard double quotes (") for strings.
