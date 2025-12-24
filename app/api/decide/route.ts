@@ -122,6 +122,7 @@ export async function POST(req: Request) {
          - Identify specific mental models found in the context.
          - Do NOT force a framework if it is not in the context.
          - USE MARKDOWN LISTS to highlight frameworks
+         - USE PARAGRAPHS to separate ideas.
       5. CRITICAL JSON RULES:
          - Return valid JSON only.
          - Use standard double quotes (") for strings.
