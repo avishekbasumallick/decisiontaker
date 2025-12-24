@@ -123,7 +123,7 @@ export async function POST(req: Request) {
          - USE PARAGRAPHS to separate ideas.
       5. CRITICAL JSON RULES:
          - Return valid JSON only.
-         - Escape all newlines inside strings as "\\n" (literal backslash n).
+         - Use standard double quotes (") for strings.
          - Do NOT use real/literal line breaks inside the JSON strings.
     `);
 
