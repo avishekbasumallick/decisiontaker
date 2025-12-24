@@ -5,25 +5,34 @@ import { PromptTemplate } from "@langchain/core/prompts";
 
 // --- HELPER: SUPER CLEANER ---
 function cleanAndParseJSON(text: string): any {
-  let clean = text;
+  try {
+    // 1. Remove Markdown code blocks
+    let clean = text.replace(/(\`\`\`json|\`\`\`)/g, "");
+    
+    // 2. Find the JSON object
+    const start = clean.indexOf('{');
+    const end = clean.lastIndexOf('}');
+    if (start !== -1 && end !== -1) {
+      clean = clean.substring(start, end + 1);
+    }
 
-  // 1. Strip Markdown code blocks (```json ... ```)
-  clean = clean.replace(/```json/g, "").replace(/```/g, "");
+    // 3. Fix unescaped newlines (The killer of JSON)
+    // This regex looks for newlines that are NOT escaped
+    clean = clean.replace(/(?<!\\)\n/g, "\\n");
+    
+    // 4. Handle Tab characters
+    clean = clean.replace(/\t/g, "\\t");
 
-  // 2. Find the JSON object (first '{' to last '}')
-  const start = clean.indexOf('{');
-  const end = clean.lastIndexOf('}');
-  if (start !== -1 && end !== -1) {
-    clean = clean.substring(start, end + 1);
+    return JSON.parse(clean);
+  } catch (e) {
+    // If standard parsing fails, return a polite error object instead of crashing
+    console.error("JSON PARSE FAILED:", text);
+    return {
+      recommendation: "Analysis Generated (Format Error)",
+      short_reason: "The AI generated a response but the formatting was slightly off.",
+      detailed_reasoning: text // Return raw text so the user at least sees the answer!
+    };
   }
-
-  // 3. FIX: Escape unescaped newlines inside strings
-  // This is the most common cause of "Invalid JSON"
-  // It looks for newlines that are NOT followed by a quote or whitespace
-  clean = clean.replace(/\n/g, " "); 
-
-  // 4. Try parsing
-  return JSON.parse(clean);
 }
 // -----------------------------
 
@@ -106,14 +115,16 @@ export async function POST(req: Request) {
       {context}
       
       Instructions:
-      1. You MUST select exactly one option.
-      2. "recommendation": The text of the option you selected.
-      3. "short_reason": A concise summary (Maximum 2 sentences).
-      4. "detailed_reasoning": A comprehensive analysis (Minimum 150 words).
-         - Identify specific mental models found in the context.
-         - Do NOT force a framework if it is not in the context.
-         - Use Markdown bolding (**text**) to highlight frameworks.
-      5. Return valid JSON only. NO PREAMBLE.
+      1. Select one option.
+      2. "recommendation": The option text.
+      3. "short_reason": 2 sentences max.
+      4. "detailed_reasoning": A structured analysis (Min 150 words).
+         - USE MARKDOWN LISTS for frameworks (e.g. "- **WRAP Framework**: ...").
+         - USE PARAGRAPHS to separate ideas.
+      5. CRITICAL JSON RULES:
+         - Return valid JSON only.
+         - Escape all newlines inside strings as "\\n" (literal backslash n).
+         - Do NOT use real/literal line breaks inside the JSON strings.
     `);
 
     const formattedPrompt = await prompt.format({
