@@ -67,7 +67,7 @@ export async function POST(req: Request) {
     const { data: documents, error } = await supabase.rpc('match_documents', {
       query_embedding: vector,
       match_threshold: 0.1, 
-      match_count: 5 
+      match_count: 10 
     });
 
     if (error) {
