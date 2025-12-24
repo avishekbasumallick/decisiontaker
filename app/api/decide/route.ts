@@ -124,7 +124,8 @@ export async function POST(req: Request) {
       5. CRITICAL JSON RULES:
          - Return valid JSON only.
          - Use standard double quotes (") for strings.
-         - Do NOT use real/literal line breaks inside the JSON strings.
+         - DO NOT use triple quotes (""").
+         - 
     `);
 
     const formattedPrompt = await prompt.format({
