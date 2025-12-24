@@ -119,7 +119,7 @@ export async function POST(req: Request) {
       2. "recommendation": The option text.
       3. "short_reason": 2 sentences max.
       4. "detailed_reasoning": A structured analysis (Min 150 words).
-         - USE MARKDOWN LISTS for frameworks (e.g. "- **WRAP Framework**: ...").
+         - Identify specific mental models found in the context.
          - USE PARAGRAPHS to separate ideas.
       5. CRITICAL JSON RULES:
          - Return valid JSON only.
