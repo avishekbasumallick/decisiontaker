@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Loader2, ChevronDown, ChevronUp } from 'lucide-react';
-import ReactMarkdown from 'react-markdown'; // Import ReactMarkdown
+// Removed: import ReactMarkdown from 'react-markdown';
 
 export default function DecisionTool() {
   const [problem, setProblem] = useState('');
@@ -175,15 +175,10 @@ export default function DecisionTool() {
               </button>
               
               {showDetails && (
-                <div className="prose prose-sm max-w-none text-gray-700 p-6 bg-white border-t">
-                  <ReactMarkdown components={{
-                    strong: ({node, ...props}) => <span className="font-bold text-blue-700 bg-blue-50 px-1 rounded" {...props} />,
-                    p: ({node, ...props}) => <p className="mb-4 leading-relaxed" {...props} />,
-                    ul: ({node, ...props}) => <ul className="list-disc pl-5 mb-4 space-y-1" {...props} />,
-                    li: ({node, ...props}) => <li className="pl-1" {...props} />
-                  }}>
+                <div className="p-6 text-gray-700 prose prose-sm max-w-none border-t bg-white">
+                  <div className="whitespace-pre-wrap leading-relaxed">
                     {result.detailed_reasoning}
-                  </ReactMarkdown>
+                  </div>
                 </div>
               )}
             </div>

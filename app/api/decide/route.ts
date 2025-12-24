@@ -119,13 +119,16 @@ export async function POST(req: Request) {
       1. Select one option.
       2. "recommendation": The option text.
       3. "short_reason": 2 sentences max.
-      4. "detailed_reasoning": A structured analysis (Min 150 words).
-         - USE MARKDOWN LISTS for frameworks (e.g. "- **WRAP Framework**: ...").
-         - USE PARAGRAPHS to separate ideas.
+      4. "detailed_reasoning": A comprehensive analysis (Min 150 words).
+         - Identify the specific mental models found in the context.
+         - Do NOT force a framework if it is not in the context.
+         - Use standard paragraphs separated by newlines.
+         - Do NOT use Markdown formatting (no bolding or asterisks).
       5. CRITICAL JSON RULES:
          - Return valid JSON only.
-         - Escape all newlines inside strings as "\\n" (literal backslash n).
-         - Do NOT use real/literal line breaks inside the JSON strings.
+         - Use standard double quotes (") for strings.
+         - DO NOT use triple quotes (""").
+         - Escape all newlines inside strings as "\\n".
     `);
 
     const formattedPrompt = await prompt.format({
