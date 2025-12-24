@@ -177,7 +177,13 @@ export default function DecisionTool() {
               {showDetails && (
                 <div className="p-6 text-gray-700 prose prose-sm max-w-none border-t bg-white">
                   <div className="whitespace-pre-wrap leading-relaxed">
-                    {result.detailed_reasoning}
+                    {result.detailed_reasoning.replace(/\\n/g, '\n').split('\n').map((paragraph: string, index: number) => (
+                      paragraph.trim() && (
+                        <p key={index} className="mb-4 last:mb-0">
+                          {paragraph}
+                        </p>
+                      )
+                    ))}
                   </div>
                 </div>
               )}
