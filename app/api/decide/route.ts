@@ -27,11 +27,18 @@ function cleanAndParseJSON(text: string): any {
 
     return JSON.parse(clean);
   } catch (e) {
-    console.error("JSON PARSE FAILED:", text);
+    console.error("JSON PARSE FAILED, attempting regex fallback:", text);
+    
+    // Fallback Regex Extraction
+    const recMatch = text.match(/"recommendation":\s*"([^"]*?)"/);
+    const shortMatch = text.match(/"short_reason":\s*"([^"]*?)"/);
+    // For detailed reasoning, grab everything after the key, removing simple quote wrappers if they exist
+    const detailMatch = text.match(/"detailed_reasoning":\s*"?([\s\S]*?)"?\s*}/) || text.match(/"detailed_reasoning":\s*([\s\S]*)/);
+
     return {
-      recommendation: "Analysis Generated (Format Error)",
-      short_reason: "The AI generated a response but the formatting was slightly off.",
-      detailed_reasoning: text // Return raw text as fallback
+      recommendation: recMatch ? recMatch[1] : "Analysis Complete",
+      short_reason: shortMatch ? shortMatch[1] : "See detailed reasoning below.",
+      detailed_reasoning: detailMatch ? detailMatch[1].trim().replace(/^"|"$|}$/g, '') : text // Fallback to full text if all else fails
     };
   }
 }
