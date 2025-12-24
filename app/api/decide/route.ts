@@ -110,9 +110,9 @@ export async function POST(req: Request) {
       2. "recommendation": The text of the option you selected.
       3. "short_reason": A concise summary (Maximum 2 sentences).
       4. "detailed_reasoning": A comprehensive analysis (Minimum 150 words).
-         - You MUST explicitly name the Mental Models used (e.g. **WRAP Framework**).
+         - Identify specific mental models found in the context.
+         - Do NOT force a framework if it is not in the context.
          - Use Markdown bolding (**text**) to highlight frameworks.
-         - Do NOT use newlines inside the JSON strings. Use single spaces.
       5. Return valid JSON only. NO PREAMBLE.
     `);
 
