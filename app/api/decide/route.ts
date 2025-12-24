@@ -8,29 +8,30 @@ function cleanAndParseJSON(text: string): any {
   try {
     // 1. Remove Markdown code blocks
     let clean = text.replace(/(\`\`\`json|\`\`\`)/g, "");
-    
-    // 2. Find the JSON object
+
+    // 2. Find the first '{' and last '}'
     const start = clean.indexOf('{');
     const end = clean.lastIndexOf('}');
     if (start !== -1 && end !== -1) {
       clean = clean.substring(start, end + 1);
     }
 
-    // 3. Fix unescaped newlines (The killer of JSON)
-    // This regex looks for newlines that are NOT escaped
+    // 3. FIX: Replace Python-style triple quotes with standard double quotes
+    clean = clean.replace(/"""/g, '"');
+
+    // 4. FIX: Escape unescaped newlines (turn real line breaks into \n)
     clean = clean.replace(/(?<!\\)\n/g, "\\n");
-    
-    // 4. Handle Tab characters
+
+    // 5. Handle Tab characters
     clean = clean.replace(/\t/g, "\\t");
 
     return JSON.parse(clean);
   } catch (e) {
-    // If standard parsing fails, return a polite error object instead of crashing
     console.error("JSON PARSE FAILED:", text);
     return {
       recommendation: "Analysis Generated (Format Error)",
       short_reason: "The AI generated a response but the formatting was slightly off.",
-      detailed_reasoning: text // Return raw text so the user at least sees the answer!
+      detailed_reasoning: text // Return raw text as fallback
     };
   }
 }
@@ -119,15 +120,12 @@ export async function POST(req: Request) {
       2. "recommendation": The option text.
       3. "short_reason": 2 sentences max.
       4. "detailed_reasoning": A structured analysis (Min 150 words).
-         - Identify specific mental models found in the context.
-         - Do NOT force a framework if it is not in the context.
-         - USE MARKDOWN LISTS to highlight frameworks.
+         - USE MARKDOWN LISTS for frameworks (e.g. "- **WRAP Framework**: ...").
          - USE PARAGRAPHS to separate ideas.
       5. CRITICAL JSON RULES:
          - Return valid JSON only.
-         - Use standard double quotes (") for strings.
-         - DO NOT use triple quotes (""").
-         - Escape all newlines inside strings as "\n".
+         - Escape all newlines inside strings as "\\n" (literal backslash n).
+         - Do NOT use real/literal line breaks inside the JSON strings.
     `);
 
     const formattedPrompt = await prompt.format({
