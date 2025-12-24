@@ -125,7 +125,7 @@ export async function POST(req: Request) {
          - Return valid JSON only.
          - Use standard double quotes (") for strings.
          - DO NOT use triple quotes (""").
-         - 
+         - Escape all newlines inside strings as "\n".
     `);
 
     const formattedPrompt = await prompt.format({
