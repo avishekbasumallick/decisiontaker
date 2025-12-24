@@ -1,29 +1,42 @@
 import { createClient } from '@supabase/supabase-js';
 import { ChatGroq } from "@langchain/groq";
-// NEW: Google Embeddings
 import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
 import { PromptTemplate } from "@langchain/core/prompts";
 
-// Helper: Clean JSON
-function cleanJsonOutput(text: string): string {
-  try {
-    const start = text.indexOf('{');
-    const end = text.lastIndexOf('}');
-    if (start !== -1 && end !== -1) {
-      return text.substring(start, end + 1);
-    }
-    return text;
-  } catch (e) { return text; }
+// --- HELPER: SUPER CLEANER ---
+function cleanAndParseJSON(text: string): any {
+  let clean = text;
+
+  // 1. Strip Markdown code blocks (```json ... ```)
+  clean = clean.replace(/```json/g, "").replace(/```/g, "");
+
+  // 2. Find the JSON object (first '{' to last '}')
+  const start = clean.indexOf('{');
+  const end = clean.lastIndexOf('}');
+  if (start !== -1 && end !== -1) {
+    clean = clean.substring(start, end + 1);
+  }
+
+  // 3. FIX: Escape unescaped newlines inside strings
+  // This is the most common cause of "Invalid JSON"
+  // It looks for newlines that are NOT followed by a quote or whitespace
+  clean = clean.replace(/\n/g, " "); 
+
+  // 4. Try parsing
+  return JSON.parse(clean);
 }
+// -----------------------------
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const GROQ_KEY = process.env.GROQ_API_KEY;
-const GOOGLE_KEY = process.env.GOOGLE_API_KEY; // New Key
+const GOOGLE_KEY = process.env.GOOGLE_API_KEY;
 
 export async function POST(req: Request) {
+  console.log("--------------- API REQUEST STARTED ---------------");
+
   if (!SUPABASE_URL || !SUPABASE_KEY || !GROQ_KEY || !GOOGLE_KEY) {
-    return Response.json({ error: "Missing API Keys (Need Google Key)" }, { status: 500 });
+    return Response.json({ error: "Missing API Keys" }, { status: 500 });
   }
 
   try {
@@ -32,10 +45,10 @@ export async function POST(req: Request) {
     const options = (body.options || []).map((o: string) => o.replace(/[\x00-\x1F\x7F]/g, ""));
 
     // --- STEP 1: EMBEDDING (Google) ---
-    console.log("🧠 Generating Embedding (Google)...");
+    console.log("🧠 Generating Embedding...");
     const embeddings = new GoogleGenerativeAIEmbeddings({
       apiKey: GOOGLE_KEY,
-      modelName: "text-embedding-004",
+      modelName: "text-embedding-004", // Ensure this matches your script
     });
 
     let vector;
@@ -43,32 +56,40 @@ export async function POST(req: Request) {
       vector = await embeddings.embedQuery(problem);
     } catch (err: any) {
       console.error("❌ Google Embedding Failed:", err.message);
-      return Response.json({ error: "Embedding service failed." }, { status: 503 });
+      return Response.json({ error: "Embedding service busy." }, { status: 503 });
     }
 
     // --- STEP 2: RETRIEVAL ---
-    console.log("🔍 Searching Supabase...");
+    console.log("🔍 Searching Knowledge Base...");
     const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+    
+    // Check if we get results
     const { data: documents, error } = await supabase.rpc('match_documents', {
       query_embedding: vector,
       match_threshold: 0.1, 
       match_count: 5 
     });
 
-    if (error) throw new Error("Database search failed.");
+    if (error) {
+      console.error("Supabase Error:", error);
+      throw new Error("Database search failed.");
+    }
 
+    // Handle "No Results"
     if (!documents || documents.length === 0) {
       return Response.json({
         recommendation: "Unable to analyze.",
-        short_reason: "No relevant frameworks found.",
+        short_reason: "No relevant frameworks found in your library.",
         detailed_reasoning: "The system searched your uploaded books but could not find a mental model that applies to this specific problem."
       });
     }
 
     const contextText = documents.map((doc: any) => doc.content).join("\n---\n");
+    console.log(`✅ Found ${documents.length} book chunks.`);
 
     // --- STEP 3: REASONING (Groq) ---
-    console.log("🤖 Asking Groq...");
+    console.log("🤖 Asking Groq (Llama 3.1)...");
+    
     const model = new ChatGroq({
       apiKey: GROQ_KEY,
       model: "llama-3.1-8b-instant",
@@ -77,10 +98,13 @@ export async function POST(req: Request) {
 
     const prompt = PromptTemplate.fromTemplate(`
       You are an expert decision consultant.
+      
       User Problem: {problem}
       User Options: {options}
+      
       CONTEXT FROM LIBRARY (STRICT):
       {context}
+      
       Instructions:
       1. You MUST select exactly one option.
       2. "recommendation": The text of the option you selected.
@@ -88,6 +112,7 @@ export async function POST(req: Request) {
       4. "detailed_reasoning": A comprehensive analysis (Minimum 150 words).
          - You MUST explicitly name the Mental Models used (e.g. **WRAP Framework**).
          - Use Markdown bolding (**text**) to highlight frameworks.
+         - Do NOT use newlines inside the JSON strings. Use single spaces.
       5. Return valid JSON only. NO PREAMBLE.
     `);
 
@@ -100,17 +125,22 @@ export async function POST(req: Request) {
     const response = await model.invoke(formattedPrompt);
     const rawOutputString = response.content as string; 
     
+    // --- ROBUST PARSE WITH DEBUGGING ---
     let result;
     try {
-      result = JSON.parse(cleanJsonOutput(rawOutputString));
+      result = cleanAndParseJSON(rawOutputString);
     } catch (e) {
-      throw new Error("AI returned invalid JSON format.");
+      console.error("❌ JSON Parse Failed!");
+      console.log("--------------- RAW AI OUTPUT START ---------------");
+      console.log(rawOutputString);
+      console.log("--------------- RAW AI OUTPUT END -----------------");
+      throw new Error("AI returned invalid JSON format. Check server logs.");
     }
 
     return Response.json(result);
 
   } catch (e: any) {
-    console.error("❌ ERROR:", e);
-    return Response.json({ error: e.message }, { status: 500 });
+    console.error("❌ CRITICAL ERROR:", e);
+    return Response.json({ error: e.message || "Unknown Server Error" }, { status: 500 });
   }
 }
