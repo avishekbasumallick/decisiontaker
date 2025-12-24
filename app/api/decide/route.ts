@@ -121,7 +121,7 @@ export async function POST(req: Request) {
       4. "detailed_reasoning": A structured analysis (Min 150 words).
          - Identify specific mental models found in the context.
          - Do NOT force a framework if it is not in the context.
-         - 
+         - Use Markdown bolding (**text**) to highlight frameworks.
       5. CRITICAL JSON RULES:
          - Return valid JSON only.
          - Use standard double quotes (") for strings.
