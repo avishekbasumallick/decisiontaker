@@ -35,7 +35,7 @@ export async function POST(req: Request) {
     console.log("🧠 Generating Embedding (Google)...");
     const embeddings = new GoogleGenerativeAIEmbeddings({
       apiKey: GOOGLE_KEY,
-      modelName: "embedding-001",
+      modelName: "embedding-004",
     });
 
     let vector;
