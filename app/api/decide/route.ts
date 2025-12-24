@@ -6,22 +6,19 @@ import { PromptTemplate } from "@langchain/core/prompts";
 // --- HELPER: ROBUST JSON EXTRACTION ---
 function cleanJsonOutput(text: string): string {
   try {
-    // 1. Find the first '{' and the last '}'
     const start = text.indexOf('{');
     const end = text.lastIndexOf('}');
-    
-    // If we found brackets, extract just that part
     if (start !== -1 && end !== -1) {
       return text.substring(start, end + 1);
     }
-    
-    // Fallback: Return original text if no brackets found (will likely fail parse, but we tried)
     return text;
   } catch (e) {
     return text;
   }
 }
-// --------------------------------------
+
+// --- HELPER: SLEEP (For retries) ---
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -40,19 +37,32 @@ export async function POST(req: Request) {
     const problem = (body.problem || "").replace(/[\x00-\x1F\x7F]/g, "");
     const options = (body.options || []).map((o: string) => o.replace(/[\x00-\x1F\x7F]/g, ""));
 
-    // --- STEP 1: EMBEDDING ---
+    // --- STEP 1: EMBEDDING (WITH RETRY LOGIC) ---
     console.log("🧠 Generating Embedding...");
+    
     const embeddings = new HuggingFaceInferenceEmbeddings({
       apiKey: HF_TOKEN, 
       model: "sentence-transformers/all-MiniLM-L6-v2",
     });
 
     let vector;
-    try {
-      vector = await embeddings.embedQuery(problem);
-    } catch (err: any) {
-      console.error("❌ Embedding Failed:", err.message);
-      return Response.json({ error: "Hugging Face is busy. Please try again in 5 seconds." }, { status: 503 });
+    let attempts = 0;
+    const maxAttempts = 5; // Try 5 times before failing
+
+    while (attempts < maxAttempts) {
+      try {
+        vector = await embeddings.embedQuery(problem);
+        break; // Success! Exit loop
+      } catch (err: any) {
+        attempts++;
+        console.warn(`⚠️ Embedding Attempt ${attempts} failed. Retrying...`);
+        if (attempts >= maxAttempts) {
+          console.error("❌ All embedding attempts failed.");
+          return Response.json({ error: "The AI Brain is currently overloaded. Please try again in a minute." }, { status: 503 });
+        }
+        // Wait 1s, 2s, 3s, 4s...
+        await sleep(1000 * attempts);
+      }
     }
 
     // --- STEP 2: RETRIEVAL ---
@@ -118,10 +128,7 @@ export async function POST(req: Request) {
     // --- ROBUST CLEAN & PARSE ---
     let result;
     try {
-      // 1. Extract just the JSON part { ... }
       const cleanString = cleanJsonOutput(rawOutputString);
-      
-      // 2. Parse it
       result = JSON.parse(cleanString);
     } catch (e) {
       console.error("❌ JSON Parse Failed on output:", rawOutputString);
