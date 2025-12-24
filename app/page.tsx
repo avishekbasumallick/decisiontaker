@@ -25,6 +25,20 @@ export default function DecisionTool() {
     }
   };
 
+  const EXAMPLE_PROBLEM = "Should I fire my brilliant but toxic sales lead, Sarah, who consistently hits targets but alienates team members, or try to coach her, risking further team morale issues?";
+  const EXAMPLE_OPTIONS = [
+    "Fire Sarah immediately to protect team morale and culture, accepting a temporary dip in sales performance.",
+    "Implement a strict performance improvement plan with Sarah, including mandatory coaching and clear behavioral expectations, with termination as the consequence for non-compliance.",
+    "Reassign Sarah to a solo contributor role where her brilliance can be utilized without direct team interaction, if such a role exists and is viable."
+  ];
+
+  const handleLoadExample = () => {
+    setProblem(EXAMPLE_PROBLEM);
+    setOptions(EXAMPLE_OPTIONS);
+    setResult(null); // Clear previous results when loading example
+    setShowDetails(false);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -68,6 +82,28 @@ export default function DecisionTool() {
         <div className="text-center">
           <h1 className="text-3xl font-extrabold text-gray-900">✨ Decision Engine</h1>
           <p className="mt-2 text-gray-600">Decision analysis backed by a RAG knowledge base comprising the best material available on decision taking</p>
+          <button 
+            onClick={handleLoadExample} 
+            className="mt-4 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500"
+          >
+            ✨ Try with Example
+          </button>
+        </div>
+
+        {/* Pro Tip Banner */}
+        <div className="bg-blue-50 border-l-4 border-blue-400 text-blue-800 p-4 rounded-md" role="alert">
+          <div className="flex items-center">
+            <div className="flex-shrink-0">
+              <svg className="h-5 w-5 text-blue-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+              </svg>
+            </div>
+            <div className="ml-3">
+              <p className="text-sm font-medium">
+                💡 Pro Tip: The more details you provide in the Problem and Options fields, the better the AI can match specific mental models from the library.
+              </p>
+            </div>
+          </div>
         </div>
 
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
@@ -78,7 +114,7 @@ export default function DecisionTool() {
                 required
                 rows={3}
                 className="w-full p-3 border rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
-                placeholder="e.g. Should I quit my job to start a bakery?"
+                placeholder="Describe the context, stakes, and constraints (e.g. 'I have a limited budget and a tight deadline...')"
                 value={problem}
                 onChange={(e) => setProblem(e.target.value)}
               />
@@ -92,7 +128,7 @@ export default function DecisionTool() {
                   <input
                     required
                     className="flex-1 p-2 border rounded-md focus:ring-blue-500 focus:border-blue-500"
-                    placeholder={`Option ${idx + 1}`}
+                    placeholder={idx === 0 ? "Detailed option 1 (e.g. 'Hire a freelancer to save money but risk quality')" : idx === 1 ? "Detailed option 2 (e.g. 'Pay extra for an agency to guarantee speed')" : `Option ${idx + 1}`}
                     value={opt}
                     onChange={(e) => handleOptionChange(idx, e.target.value)}
                   />
