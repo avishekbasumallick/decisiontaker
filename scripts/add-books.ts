@@ -1,34 +1,61 @@
 import "dotenv/config";
 import fs from "fs";
 import path from "path";
-// FIX: Changed from @langchain/community to langchain main package
 import { PDFLoader } from "langchain/document_loaders/fs/pdf";
 import { EPubLoader } from "langchain/document_loaders/fs/epub";
 import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
-// FIX: Changed embeddings to main package or standard path
-import { HuggingFaceInferenceEmbeddings } from "@langchain/community/embeddings/hf";
+import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
 import { createClient } from "@supabase/supabase-js";
 import { SupabaseVectorStore } from "@langchain/community/vectorstores/supabase";
+import { TaskType } from "@google/generative-ai";
+
+// CLEANER
+const cleanText = (text: string): string => {
+  return text.replace(/\u0000/g, "").replace(/\0/g, "");
+};
 
 const run = async () => {
-  console.log("🚀 STARTING BULK INGESTION...");
+  console.log("🚀 STARTING GOOGLE-POWERED INGESTION (v2)...");
+  
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-  const hfToken = process.env.HUGGINGFACEHUB_API_TOKEN!;
+  const googleKey = process.env.GOOGLE_API_KEY!;
 
-  if (!supabaseUrl || !supabaseKey || !hfToken) {
+  if (!supabaseUrl || !supabaseKey || !googleKey) {
     console.error("❌ MISSING KEYS. Check .env file.");
     return;
   }
 
-  const booksDir = path.join(process.cwd(), "books");
-  if (!fs.existsSync(booksDir)) fs.mkdirSync(booksDir);
+  // 1. SETUP GOOGLE EMBEDDINGS
+  const embeddings = new GoogleGenerativeAIEmbeddings({
+    apiKey: googleKey,
+    modelName: "text-embedding-004",
+    taskType: TaskType.RETRIEVAL_DOCUMENT,
+  });
 
+  // 2. SANITY CHECK
+  try {
+    console.log("🔍 Testing Google API connection...");
+    const testVector = await embeddings.embedQuery("test");
+    console.log(`✅ Google API is working! (Vector dimensions: ${testVector.length})`);
+    
+    // Auto-warn if DB is wrong
+    if (testVector.length !== 768) {
+      console.error(`❌ CRITICAL: Google returned ${testVector.length} dims, but your DB expects something else.`);
+      console.error("   Did you run the SQL to drop/create the table with vector(768)?");
+      return;
+    }
+  } catch (err: any) {
+    console.error("❌ Google API Failed. Check your GOOGLE_API_KEY.");
+    console.error("   Error details:", err.message);
+    return;
+  }
+
+  const booksDir = path.join(process.cwd(), "books");
   const files = fs.readdirSync(booksDir).filter(f => f.endsWith(".pdf") || f.endsWith(".epub") || f.endsWith(".txt"));
-  console.log(`📚 Found ${files.length} books in /books folder.`);
+  console.log(`📚 Found ${files.length} books.`);
 
   const client = createClient(supabaseUrl, supabaseKey);
-  const embeddings = new HuggingFaceInferenceEmbeddings({ apiKey: hfToken, model: "sentence-transformers/all-MiniLM-L6-v2" });
 
   for (const file of files) {
     console.log(`\n🔹 Processing: ${file}...`);
@@ -39,6 +66,16 @@ const run = async () => {
       if (file.endsWith(".pdf")) docs = await new PDFLoader(filePath, { splitPages: false }).load();
       else if (file.endsWith(".epub")) docs = await new EPubLoader(filePath, { splitChapters: false }).load();
       else docs = [{ pageContent: fs.readFileSync(filePath, "utf-8"), metadata: { source: file } }];
+
+      if (docs.length === 0 || docs[0].pageContent.length < 10) {
+        console.warn(`   ⚠️ Warning: File ${file} seems empty or unreadable.`);
+        continue;
+      }
+
+      docs.forEach(doc => {
+        doc.pageContent = cleanText(doc.pageContent);
+        if (doc.metadata) doc.metadata.source = file;
+      });
 
       const splits = await new RecursiveCharacterTextSplitter({ chunkSize: 1000, chunkOverlap: 200 }).splitDocuments(docs);
       
