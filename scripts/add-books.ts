@@ -9,7 +9,6 @@ import { createClient } from "@supabase/supabase-js";
 import { SupabaseVectorStore } from "@langchain/community/vectorstores/supabase";
 import { TaskType } from "@google/generative-ai";
 
-// CLEANER
 const cleanText = (text: string): string => {
   return text.replace(/\u0000/g, "").replace(/\0/g, "");
 };
@@ -26,23 +25,20 @@ const run = async () => {
     return;
   }
 
-  // 1. SETUP GOOGLE EMBEDDINGS
+  // 1. SETUP GOOGLE EMBEDDINGS (Newer Model)
   const embeddings = new GoogleGenerativeAIEmbeddings({
     apiKey: googleKey,
-    modelName: "text-embedding-004",
-    taskType: TaskType.RETRIEVAL_DOCUMENT,
+    modelName: "text-embedding-004", // ✅ Updated to newer model
+    taskType: TaskType.RETRIEVAL_DOCUMENT, // ✅ Required for better accuracy
   });
 
-  // 2. SANITY CHECK
+  // 2. SANITY CHECK: Test the API Key immediately
   try {
     console.log("🔍 Testing Google API connection...");
-    const testVector = await embeddings.embedQuery("test");
+    const testVector = await embeddings.embedQuery("hello world");
     console.log(`✅ Google API is working! (Vector dimensions: ${testVector.length})`);
-    
-    // Auto-warn if DB is wrong
     if (testVector.length !== 768) {
-      console.error(`❌ CRITICAL: Google returned ${testVector.length} dims, but your DB expects something else.`);
-      console.error("   Did you run the SQL to drop/create the table with vector(768)?");
+      console.error(`❌ CRITICAL: Vector size is ${testVector.length}, but DB expects 768. Check your SQL table.`);
       return;
     }
   } catch (err: any) {
@@ -67,6 +63,7 @@ const run = async () => {
       else if (file.endsWith(".epub")) docs = await new EPubLoader(filePath, { splitChapters: false }).load();
       else docs = [{ pageContent: fs.readFileSync(filePath, "utf-8"), metadata: { source: file } }];
 
+      // Check if text extraction worked
       if (docs.length === 0 || docs[0].pageContent.length < 10) {
         console.warn(`   ⚠️ Warning: File ${file} seems empty or unreadable.`);
         continue;

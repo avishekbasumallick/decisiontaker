@@ -1,82 +1,120 @@
 import { createClient } from '@supabase/supabase-js';
 import { ChatGroq } from "@langchain/groq";
-import { HuggingFaceInferenceEmbeddings } from "@langchain/community/embeddings/hf";
+import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
 import { PromptTemplate } from "@langchain/core/prompts";
-import { JsonOutputParser } from "@langchain/core/output_parsers";
-import { RunnableSequence } from "@langchain/core/runnables";
+
+// --- HELPER: SUPER CLEANER ---
+function cleanAndParseJSON(text: string): any {
+  try {
+    // 1. Remove Markdown code blocks
+    let clean = text.replace(/(\`\`\`json|\`\`\`)/g, "");
+
+    // 2. Find the first '{' and last '}'
+    const start = clean.indexOf('{');
+    const end = clean.lastIndexOf('}');
+    if (start !== -1 && end !== -1) {
+      clean = clean.substring(start, end + 1);
+    }
+
+    // 3. FIX: Replace Python-style triple quotes with standard double quotes
+    clean = clean.replace(/"""/g, '"');
+
+    // 4. FIX: Escape unescaped newlines (turn real line breaks into \n)
+    clean = clean.replace(/(?<!\\)\n/g, "\\n");
+
+    // 5. Handle Tab characters
+    clean = clean.replace(/\t/g, "\\t");
+
+    return JSON.parse(clean);
+  } catch (e) {
+    console.error("JSON PARSE FAILED, attempting regex fallback:", text);
+    
+    // Fallback Regex Extraction
+    const recMatch = text.match(/"recommendation":\s*"([^"]*?)"/);
+    const shortMatch = text.match(/"short_reason":\s*"([^"]*?)"/);
+    // For detailed reasoning, grab everything after the key, removing simple quote wrappers if they exist
+    const detailMatch = text.match(/"detailed_reasoning":\s*"?([\s\S]*?)"?\s*}/) || text.match(/"detailed_reasoning":\s*([\s\S]*)/);
+
+    return {
+      recommendation: recMatch ? recMatch[1] : "Analysis Complete",
+      short_reason: shortMatch ? shortMatch[1] : "See detailed reasoning below.",
+      detailed_reasoning: detailMatch ? detailMatch[1].trim().replace(/^"|"$|}$/g, '') : text // Fallback to full text if all else fails
+    };
+  }
+}
+// -----------------------------
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const GROQ_KEY = process.env.GROQ_API_KEY;
-const HF_TOKEN = process.env.HUGGINGFACEHUB_API_TOKEN;
+const GOOGLE_KEY = process.env.GOOGLE_API_KEY;
 
 export async function POST(req: Request) {
-  console.log("--------------- STRICT RAG REQUEST STARTED ---------------");
-  
-  if (!SUPABASE_URL || !SUPABASE_KEY || !GROQ_KEY || !HF_TOKEN) {
-    return Response.json({ error: "Missing API Keys in .env" }, { status: 500 });
+  console.log("--------------- API REQUEST STARTED ---------------");
+
+  if (!SUPABASE_URL || !SUPABASE_KEY || !GROQ_KEY || !GOOGLE_KEY) {
+    return Response.json({ error: "Missing API Keys" }, { status: 500 });
   }
 
   try {
-    const { problem, options } = await req.json();
+    const body = await req.json();
+    const problem = (body.problem || "").replace(/[\x00-\x1F\x7F]/g, "");
+    const options = (body.options || []).map((o: string) => o.replace(/[\x00-\x1F\x7F]/g, ""));
 
-    // --- STEP 1: EMBEDDING ---
+    // --- STEP 1: EMBEDDING (Google) ---
     console.log("🧠 Generating Embedding...");
-    const embeddings = new HuggingFaceInferenceEmbeddings({
-      apiKey: HF_TOKEN, 
-      model: "sentence-transformers/all-MiniLM-L6-v2",
+    const embeddings = new GoogleGenerativeAIEmbeddings({
+      apiKey: GOOGLE_KEY,
+      modelName: "text-embedding-004", // Ensure this matches your script
     });
 
     let vector;
     try {
       vector = await embeddings.embedQuery(problem);
     } catch (err: any) {
-      console.error("❌ Embedding Failed:", err.message);
-      return Response.json({ error: "Hugging Face is busy. Please try again in 5 seconds." }, { status: 503 });
+      console.error("❌ Google Embedding Failed:", err.message);
+      return Response.json({ error: "Embedding service busy." }, { status: 503 });
     }
 
     // --- STEP 2: RETRIEVAL ---
     console.log("🔍 Searching Knowledge Base...");
     const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
     
-    // Use the corrected function with 'documents.' prefix
+    // Check if we get results
     const { data: documents, error } = await supabase.rpc('match_documents', {
       query_embedding: vector,
       match_threshold: 0.1, 
-      match_count: 5 
+      match_count: 10 
     });
 
     if (error) {
-      console.error("❌ Supabase Error:", error);
+      console.error("Supabase Error:", error);
       throw new Error("Database search failed.");
     }
 
-    // --- STRICTNESS CHECK ---
+    // Handle "No Results"
     if (!documents || documents.length === 0) {
-      console.warn("⚠️ STRICT RAG: No documents found. Aborting.");
       return Response.json({
         recommendation: "Unable to analyze.",
-        short_reason: "No relevant frameworks found in your book library.",
-        detailed_reasoning: "The system searched your uploaded books but could not find a mental model that applies to this specific problem. Please try rephrasing your problem or adding more books to the database."
+        short_reason: "No relevant frameworks found in your library.",
+        detailed_reasoning: "The system searched your uploaded books but could not find a mental model that applies to this specific problem."
       });
     }
 
     const contextText = documents.map((doc: any) => doc.content).join("\n---\n");
-    console.log(`✅ Found ${documents.length} relevant book chunks.`);
+    console.log(`✅ Found ${documents.length} book chunks.`);
 
     // --- STEP 3: REASONING (Groq) ---
     console.log("🤖 Asking Groq (Llama 3.1)...");
     
     const model = new ChatGroq({
       apiKey: GROQ_KEY,
-      model: "llama-3.1-8b-instant", // ✅ UPDATED: The new, valid model name
+      model: "llama-3.1-8b-instant",
       temperature: 0.1, 
     });
 
-    const parser = new JsonOutputParser();
-
     const prompt = PromptTemplate.fromTemplate(`
-      You are an expert decision consultant. You have access to a specific library of non-fiction books.
+      You are an expert decision consultant.
       
       User Problem: {problem}
       User Options: {options}
@@ -85,23 +123,42 @@ export async function POST(req: Request) {
       {context}
       
       Instructions:
-      1. You MUST select exactly one option from the provided list.
-      2. You MUST base your reasoning ONLY on the "CONTEXT FROM LIBRARY" provided above.
-      3. Return valid JSON only.
-      
-      {format_instructions}
+      1. Select one option.
+      2. "recommendation": The option text.
+      3. "short_reason": 2 sentences max.
+      4. "detailed_reasoning": A comprehensive analysis (Min 150 words).
+         - Identify the specific mental models found in the context.
+         - Do NOT force a framework if it is not in the context.
+         - Use standard paragraphs separated by newlines.
+         - Do NOT use Markdown formatting (no bolding or asterisks).
+      5. CRITICAL JSON RULES:
+         - Return valid JSON only.
+         - Use standard double quotes (") for strings.
+         - DO NOT use triple quotes (""").
+         - Escape all newlines inside strings as "\\n".
     `);
 
-    const chain = RunnableSequence.from([prompt, model, parser]);
-
-    const result = await chain.invoke({
+    const formattedPrompt = await prompt.format({
       context: contextText,
       problem: problem,
       options: options.join(", "),
-      format_instructions: parser.getFormatInstructions(),
     });
 
-    console.log("✅ Success! Sending response.");
+    const response = await model.invoke(formattedPrompt);
+    const rawOutputString = response.content as string; 
+    
+    // --- ROBUST PARSE WITH DEBUGGING ---
+    let result;
+    try {
+      result = cleanAndParseJSON(rawOutputString);
+    } catch (e) {
+      console.error("❌ JSON Parse Failed!");
+      console.log("--------------- RAW AI OUTPUT START ---------------");
+      console.log(rawOutputString);
+      console.log("--------------- RAW AI OUTPUT END -----------------");
+      throw new Error("AI returned invalid JSON format. Check server logs.");
+    }
+
     return Response.json(result);
 
   } catch (e: any) {
