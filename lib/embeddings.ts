@@ -36,18 +36,31 @@ export interface GeminiEmbeddingsParams extends EmbeddingsParams {
   maxBatchSize?: number;
   /** Strip newlines from input text before embedding (matches LangChain default). */
   stripNewLines?: boolean;
+  /**
+   * L2-normalise the returned vectors. Defaults to `true` whenever
+   * `outputDimensionality` is below 3072 — Google’s API only
+   * pre-normalises the full 3072-d output, so Matryoshka-truncated
+   * vectors must be normalised manually for L2 / dot-product math to
+   * match cosine ranking. (Cosine ops in pgvector are scale-invariant
+   * either way, so this is mostly defence-in-depth.)
+   */
+  normalize?: boolean;
 }
 
 /**
- * Custom LangChain `Embeddings` implementation for Google's
+ * Custom LangChain `Embeddings` implementation for Google’s
  * `gemini-embedding-001` model.
  *
- * `@langchain/google-genai`'s built-in `GoogleGenerativeAIEmbeddings` does not
+ * `@langchain/google-genai`’s built-in `GoogleGenerativeAIEmbeddings` does not
  * forward `outputDimensionality` to the REST API, so we call the API directly
  * here and pin the dimensionality at 768 (Matryoshka representation learning).
  * That keeps the vectors compatible with the existing Supabase
  * `vector(768)` column while letting us upgrade away from the retired
  * `text-embedding-004` model.
+ *
+ * Wire-format note: the JSON request key is `output_dimensionality`
+ * (snake_case) per the v1beta REST contract. The TypeScript / constructor
+ * field stays `outputDimensionality` because that’s idiomatic JS.
  */
 export class GeminiEmbeddings extends Embeddings {
   private apiKey: string;
@@ -57,6 +70,7 @@ export class GeminiEmbeddings extends Embeddings {
   private baseUrl: string;
   private maxBatchSize: number;
   private stripNewLines: boolean;
+  private normalizeVectors: boolean;
 
   constructor(fields: GeminiEmbeddingsParams = {}) {
     super(fields);
@@ -73,6 +87,8 @@ export class GeminiEmbeddings extends Embeddings {
     this.baseUrl = (fields.baseUrl ?? GOOGLE_API_BASE).replace(/\/+$/, "");
     this.maxBatchSize = fields.maxBatchSize ?? 100;
     this.stripNewLines = fields.stripNewLines ?? true;
+    // Auto-normalise sub-3072 outputs (gemini-embedding-001 only pre-normalises 3072).
+    this.normalizeVectors = fields.normalize ?? this.outputDimensionality < 3072;
   }
 
   private clean(text: string): string {
@@ -84,7 +100,7 @@ export class GeminiEmbeddings extends Embeddings {
       model: `models/${this.model}`,
       content: { parts: [{ text: this.clean(text) }] },
       taskType: this.taskType,
-      outputDimensionality: this.outputDimensionality,
+      output_dimensionality: this.outputDimensionality,
     };
   }
 
@@ -104,6 +120,17 @@ export class GeminiEmbeddings extends Embeddings {
     return (await res.json()) as T;
   }
 
+  private l2Normalize(v: number[]): number[] {
+    if (!this.normalizeVectors) return v;
+    let sumSq = 0;
+    for (const x of v) sumSq += x * x;
+    const norm = Math.sqrt(sumSq);
+    if (norm === 0 || !Number.isFinite(norm)) return v;
+    const out = new Array<number>(v.length);
+    for (let i = 0; i < v.length; i++) out[i] = v[i] / norm;
+    return out;
+  }
+
   async embedQuery(text: string): Promise<number[]> {
     const res = await this.caller.call(async () =>
       this.post<{ embedding?: { values?: number[] } }>(
@@ -117,7 +144,7 @@ export class GeminiEmbeddings extends Embeddings {
         `Gemini embeddings: expected ${this.outputDimensionality} dims, got ${values.length}.`
       );
     }
-    return values;
+    return this.l2Normalize(values);
   }
 
   async embedDocuments(documents: string[]): Promise<number[][]> {
@@ -145,7 +172,7 @@ export class GeminiEmbeddings extends Embeddings {
             `Gemini embeddings: expected ${this.outputDimensionality} dims, got ${values.length}.`
           );
         }
-        out.push(values);
+        out.push(this.l2Normalize(values));
       }
     }
     return out;
