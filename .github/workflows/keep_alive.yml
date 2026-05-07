@@ -1,0 +1,64 @@
+name: Keep Supabase Alive
+
+# Free-tier Supabase projects pause after ~7 days of inactivity. This workflow
+# pings the REST endpoint twice a week with plenty of slack on either side, so
+# even if a run is dropped or delayed the project stays warm.
+
+on:
+  # Sundays and Wednesdays at 12:00 UTC. GitHub Actions schedules are
+  # best-effort and can be delayed (or skipped) under heavy load on github.com,
+  # which is why we run twice a week rather than once every six days.
+  schedule:
+    - cron: "0 12 * * 0,3"
+  # Manual trigger from the Actions tab so you can verify the secrets are
+  # wired up correctly without waiting for the next scheduled run.
+  workflow_dispatch:
+
+# Required secrets (Settings -> Secrets and variables -> Actions):
+#   SUPABASE_URL        e.g. https://<project-ref>.supabase.co
+#   SUPABASE_ANON_KEY   the public anon key (NOT the service_role key — anon
+#                       is sufficient because RLS allows public SELECT on the
+#                       documents table, and exposing it in Actions is lower
+#                       blast radius than the service_role)
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping Supabase REST endpoint
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          set -u
+          if [ -z "${SUPABASE_URL}" ] || [ -z "${SUPABASE_ANON_KEY}" ]; then
+            echo "::error::Missing secrets — set SUPABASE_URL and SUPABASE_ANON_KEY in the repo's Actions secrets."
+            exit 1
+          fi
+
+          # SELECT one row from documents. Hits Postgres (not just PostgREST
+          # metadata), which is what Supabase counts as activity for the
+          # pause-after-inactivity timer.
+          url="${SUPABASE_URL%/}/rest/v1/documents?select=id&limit=1"
+          echo "Pinging $url"
+
+          status=$(curl -sS -o /tmp/keep_alive_body.txt -w "%{http_code}" \
+            -H "apikey: ${SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
+            "$url")
+
+          echo "HTTP $status"
+          # Echo the body so failures are debuggable in the Actions log.
+          # For a successful query this is just an empty array or one row.
+          head -c 1000 /tmp/keep_alive_body.txt
+          echo
+
+          # 200 = full result returned. 206 = partial (range) response, which
+          # PostgREST may return for paginated requests; treat both as healthy.
+          if [ "$status" != "200" ] && [ "$status" != "206" ]; then
+            echo "::error::Supabase ping returned HTTP $status — project may pause."
+            exit 1
+          fi
+
+          echo "OK — Supabase project pinged successfully."
