@@ -96,6 +96,20 @@ Response:
 }
 ```
 
+## MCP Server
+
+The same RAG pipeline is also exposed as a Model Context Protocol
+server, so Claude Desktop / Cursor / Cowork / claude.ai custom
+connectors can call it directly.
+
+- **Local (stdio):** `pnpm mcp:stdio`
+- **Remote (HTTP/SSE):** `/api/mcp/mcp` and `/api/mcp/sse`, gated by an
+  `MCP_API_KEY` env var (returns 503 if unset).
+
+See [`mcp-server/README.md`](./mcp-server/README.md) for the tool
+schema, the Claude Desktop config snippet, and the remote-connector
+setup.
+
 ## Database Schema
 
 The application uses a `documents` table with:
