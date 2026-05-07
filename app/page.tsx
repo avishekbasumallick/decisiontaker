@@ -2,7 +2,8 @@
 
 import { useState } from 'react';
 import Image from 'next/image'; // Import Image component
-import { Loader2, ChevronDown, ChevronUp } from 'lucide-react';
+import Link from 'next/link';
+import { Loader2, ChevronDown, ChevronUp, Plug } from 'lucide-react';
 // Removed: import ReactMarkdown from 'react-markdown';
 
 export default function DecisionTool() {
@@ -91,12 +92,21 @@ export default function DecisionTool() {
           />
           <h1 className="text-3xl font-extrabold text-gray-900">✨ Decision Engine</h1>
           <p className="mt-2 text-gray-600">Decision analysis backed by a RAG knowledge base comprising the best material available on decision taking</p>
-          <button 
-            onClick={handleLoadExample} 
-            className="mt-4 inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500"
-          >
-            ✨ Try with Example
-          </button>
+          <div className="mt-4 flex items-center justify-center gap-3 flex-wrap">
+            <button
+              onClick={handleLoadExample}
+              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500"
+            >
+              ✨ Try with Example
+            </button>
+            <Link
+              href="/mcp"
+              className="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-400"
+            >
+              <Plug className="h-4 w-4" />
+              Use as MCP server
+            </Link>
+          </div>
         </div>
 
         {/* Pro Tip Banner */}
