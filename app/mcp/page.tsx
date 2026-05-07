@@ -122,9 +122,7 @@ export default function McpDocsPage() {
           </div>
           <p className="text-xs text-gray-500 pt-2 border-t border-gray-100">
             This is a shared, free demo deployment — please use it
-            responsibly. Voyage AI and Groq are running on free tiers; if
-            usage gets heavy this URL will move behind per-user OAuth and the
-            shared key will be retired. For unconstrained use, see{" "}
+            responsibly. For unconstrained use, see{" "}
             <a
               href="#self-host"
               className="text-blue-600 hover:text-blue-800 underline"
