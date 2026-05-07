@@ -12,7 +12,19 @@
  * Auth: bearer token from the `MCP_API_KEY` env var. If the env var is
  * unset the route returns 503, so the endpoint can't accidentally go
  * public if you forget to configure it on Vercel. If it is set, every
- * request must carry `Authorization: Bearer <MCP_API_KEY>`.
+ * request must carry the secret in one of two forms:
+ *
+ *   - Preferred (curl, mcp-remote, Claude Desktop):
+ *       Authorization: Bearer <MCP_API_KEY>
+ *
+ *   - Fallback (claude.ai custom connectors, which only let you set a
+ *     URL — no header field is exposed in the UI):
+ *       URL ends with ?key=<MCP_API_KEY>
+ *
+ *     Treat URL-embedded secrets as a personal-use convenience only —
+ *     the secret leaks into request logs and the claude.ai connector
+ *     UI. For sharing the connector with anyone else, replace this
+ *     with proper OAuth via mcp-handler's withMcpAuth().
  */
 import { createMcpHandler } from "mcp-handler";
 import { registerDecideTool, SERVER_INFO } from "@/mcp-server/server";
@@ -51,13 +63,30 @@ function disabled(): Response {
   );
 }
 
+function extractToken(req: Request): string | undefined {
+  // 1. Authorization: Bearer <token> — preferred
+  const auth = req.headers.get("authorization") ?? "";
+  const headerMatch = /^Bearer\s+(.+)$/i.exec(auth);
+  const headerToken = headerMatch?.[1]?.trim();
+  if (headerToken) return headerToken;
+
+  // 2. ?key=<token> in the URL — fallback for claude.ai custom connectors
+  try {
+    const url = new URL(req.url);
+    const queryToken = url.searchParams.get("key")?.trim();
+    if (queryToken) return queryToken;
+  } catch {
+    // Malformed URL — fall through to undefined.
+  }
+
+  return undefined;
+}
+
 async function authedHandler(req: Request): Promise<Response> {
   const expected = process.env.MCP_API_KEY;
   if (!expected) return disabled();
 
-  const auth = req.headers.get("authorization") ?? "";
-  const match = /^Bearer\s+(.+)$/i.exec(auth);
-  const token = match?.[1]?.trim();
+  const token = extractToken(req);
   if (!token || token !== expected) {
     return unauthorized("Missing or invalid bearer token.");
   }
