@@ -6,56 +6,64 @@ import { EPubLoader } from "langchain/document_loaders/fs/epub";
 import { RecursiveCharacterTextSplitter } from "langchain/text_splitter";
 import { createClient } from "@supabase/supabase-js";
 import { SupabaseVectorStore } from "@langchain/community/vectorstores/supabase";
-import { GeminiEmbeddings } from "../lib/embeddings";
+import { VoyageEmbeddings } from "../lib/embeddings";
 
-// gemini-embedding-001 defaults to 3072 dims; we pin 768 via Matryoshka
-// (outputDimensionality) so it matches the Supabase pgvector(768) column.
-const EMBEDDING_MODEL = "gemini-embedding-001";
-const EMBEDDING_DIMENSIONS = 768;
+// voyage-4-lite default dim is 1024 — matches the Supabase pgvector(1024) column.
+const EMBEDDING_MODEL = "voyage-4-lite";
+const EMBEDDING_DIMENSIONS = 1024;
 
-// Upload chunks in small batches with a short pause between batches to stay
-// inside Google's per-minute embedding quota even for very large books.
-const BATCH_SIZE = 10;
-const DELAY_BETWEEN_BATCHES_MS = 100;
+// SupabaseVectorStore receives chunks in slices of this size. Inside
+// VoyageEmbeddings each call is split again into Voyage-API-batches of up to
+// `voyageMaxBatchSize` per request. For most books, a single Supabase write
+// = a single Voyage API call.
+const SUPABASE_BATCH_SIZE = 30;
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+// Voyage free-tier-without-payment-method limits: 3 RPM, 10K TPM. We pace at
+// ~1 request every 21 seconds to stay under 3 RPM, and cap each Voyage batch
+// at 30 chunks (~7.5K tokens) to stay under TPM. With a payment method on
+// file (no charge until you cross 200M free tokens) the limits jump to
+// 2000 RPM / 8M TPM — drop voyageMinMsBetweenRequests to ~30 in that case.
+const VOYAGE_BATCH_SIZE = 30;
+const VOYAGE_MIN_MS_BETWEEN_REQUESTS = 21_000;
 
 const cleanText = (text: string): string => {
   return text.replace(/\u0000/g, "").replace(/\0/g, "");
 };
 
 const run = async () => {
-  console.log("STARTING GOOGLE-POWERED INGESTION (gemini-embedding-001)...");
+  console.log("STARTING VOYAGE-AI INGESTION (voyage-4-lite, 1024-d)...");
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-  const googleKey = process.env.GOOGLE_API_KEY!;
+  const voyageKey = process.env.VOYAGE_API_KEY!;
 
-  if (!supabaseUrl || !supabaseKey || !googleKey) {
-    console.error("MISSING KEYS. Check .env file.");
+  if (!supabaseUrl || !supabaseKey || !voyageKey) {
+    console.error("MISSING KEYS. Need NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, VOYAGE_API_KEY in .env.");
     return;
   }
 
-  const embeddings = new GeminiEmbeddings({
-    apiKey: googleKey,
+  const embeddings = new VoyageEmbeddings({
+    apiKey: voyageKey,
     model: EMBEDDING_MODEL,
-    outputDimensionality: EMBEDDING_DIMENSIONS,
-    taskType: "RETRIEVAL_DOCUMENT",
+    inputType: "document",
+    maxBatchSize: VOYAGE_BATCH_SIZE,
+    minMsBetweenRequests: VOYAGE_MIN_MS_BETWEEN_REQUESTS,
+    maxRetries: 5,
   });
 
-  // Sanity check: confirm the API key works and the model returns the dim we pinned.
+  // Sanity check: confirm the API key works and the model returns the dim we expect.
   try {
-    console.log("Testing Google API connection...");
+    console.log("Testing Voyage API connection...");
     const testVector = await embeddings.embedQuery("hello world");
-    console.log(`Google API is working! (Vector dimensions: ${testVector.length})`);
+    console.log(`Voyage API is working! (Vector dimensions: ${testVector.length})`);
     if (testVector.length !== EMBEDDING_DIMENSIONS) {
       console.error(
-        `CRITICAL: Vector size is ${testVector.length}, but DB expects ${EMBEDDING_DIMENSIONS}. Check your SQL table.`
+        `CRITICAL: Vector size is ${testVector.length}, but DB expects ${EMBEDDING_DIMENSIONS}. Check your SQL table type and the model.`
       );
       return;
     }
   } catch (err: any) {
-    console.error("Google API Failed. Check your GOOGLE_API_KEY.");
+    console.error("Voyage API Failed. Check your VOYAGE_API_KEY.");
     console.error("   Error details:", err.message);
     return;
   }
@@ -78,9 +86,7 @@ const run = async () => {
   let failed = 0;
 
   for (const file of files) {
-    // Per-file dedup. Each chunk we upload tags metadata.source = filename, so a
-    // single hit means the whole file was already ingested. To force a re-embed,
-    // delete its rows first:
+    // Per-file dedup. To force a re-embed, delete its rows first:
     //   DELETE FROM documents WHERE metadata->>'source' = '<file>';
     const { data: existing, error: existsErr } = await client
       .from("documents")
@@ -132,21 +138,17 @@ const run = async () => {
       }).splitDocuments(docs);
 
       console.log(
-        `   Split into ${splits.length} chunks. Uploading in batches of ${BATCH_SIZE}...`
+        `   Split into ${splits.length} chunks. Uploading in Supabase batches of ${SUPABASE_BATCH_SIZE} (Voyage paces at 1 request / ~${Math.round(VOYAGE_MIN_MS_BETWEEN_REQUESTS / 1000)}s)...`
       );
 
-      // Batch the uploads. SupabaseVectorStore.fromDocuments embeds each batch
-      // server-side and inserts the rows; the sleep keeps Google's per-minute
-      // embedding quota happy on large books.
-      for (let i = 0; i < splits.length; i += BATCH_SIZE) {
-        const batch = splits.slice(i, i + BATCH_SIZE);
+      for (let i = 0; i < splits.length; i += SUPABASE_BATCH_SIZE) {
+        const batch = splits.slice(i, i + SUPABASE_BATCH_SIZE);
         await SupabaseVectorStore.fromDocuments(batch, embeddings, {
           client,
           tableName: "documents",
           queryName: "match_documents",
         });
         process.stdout.write(".");
-        await sleep(DELAY_BETWEEN_BATCHES_MS);
       }
 
       console.log(`\n   Uploaded ${file} (${splits.length} chunks).`);

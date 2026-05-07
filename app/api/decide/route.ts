@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { ChatGroq } from "@langchain/groq";
 import { PromptTemplate } from "@langchain/core/prompts";
-import { GeminiEmbeddings } from "@/lib/embeddings";
+import { VoyageEmbeddings } from "@/lib/embeddings";
 
 // --- HELPER: SUPER CLEANER ---
 function cleanAndParseJSON(text: string): any {
@@ -28,17 +28,20 @@ function cleanAndParseJSON(text: string): any {
     return JSON.parse(clean);
   } catch (e) {
     console.error("JSON PARSE FAILED, attempting regex fallback:", text);
-    
+
     // Fallback Regex Extraction
     const recMatch = text.match(/"recommendation":\s*"([^"]*?)"/);
     const shortMatch = text.match(/"short_reason":\s*"([^"]*?)"/);
-    // For detailed reasoning, grab everything after the key, removing simple quote wrappers if they exist
-    const detailMatch = text.match(/"detailed_reasoning":\s*"?([\s\S]*?)"?\s*}/) || text.match(/"detailed_reasoning":\s*([\s\S]*)/);
+    const detailMatch =
+      text.match(/"detailed_reasoning":\s*"?([\s\S]*?)"?\s*}/) ||
+      text.match(/"detailed_reasoning":\s*([\s\S]*)/);
 
     return {
       recommendation: recMatch ? recMatch[1] : "Analysis Complete",
       short_reason: shortMatch ? shortMatch[1] : "See detailed reasoning below.",
-      detailed_reasoning: detailMatch ? detailMatch[1].trim().replace(/^"|"$|}$/g, '') : text // Fallback to full text if all else fails
+      detailed_reasoning: detailMatch
+        ? detailMatch[1].trim().replace(/^"|"$|}$/g, "")
+        : text,
     };
   }
 }
@@ -47,52 +50,56 @@ function cleanAndParseJSON(text: string): any {
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const GROQ_KEY = process.env.GROQ_API_KEY;
-const GOOGLE_KEY = process.env.GOOGLE_API_KEY;
+const VOYAGE_KEY = process.env.VOYAGE_API_KEY;
 
 // Embedding model + dimensionality must match the Supabase `documents.embedding`
-// column. gemini-embedding-001 defaults to 3072 dims; we pin 768 via Matryoshka
-// (outputDimensionality) so the existing pgvector(768) index keeps working.
-const EMBEDDING_MODEL = "gemini-embedding-001";
-const EMBEDDING_DIMENSIONS = 768;
+// column. voyage-4-lite returns 1024-d vectors by default, which matches the
+// pgvector(1024) column declared in supabase/migrations/20251223014733_*.sql.
+const EMBEDDING_MODEL = "voyage-4-lite";
+const EMBEDDING_DIMENSIONS = 1024;
 
 export async function POST(req: Request) {
   console.log("--------------- API REQUEST STARTED ---------------");
 
-  if (!SUPABASE_URL || !SUPABASE_KEY || !GROQ_KEY || !GOOGLE_KEY) {
+  if (!SUPABASE_URL || !SUPABASE_KEY || !GROQ_KEY || !VOYAGE_KEY) {
     return Response.json({ error: "Missing API Keys" }, { status: 500 });
   }
 
   try {
     const body = await req.json();
     const problem = (body.problem || "").replace(/[\x00-\x1F\x7F]/g, "");
-    const options = (body.options || []).map((o: string) => o.replace(/[\x00-\x1F\x7F]/g, ""));
+    const options = (body.options || []).map((o: string) =>
+      o.replace(/[\x00-\x1F\x7F]/g, "")
+    );
 
-    // --- STEP 1: EMBEDDING (Google Gemini) ---
-    console.log(`🧠 Generating Embedding (${EMBEDDING_MODEL}, ${EMBEDDING_DIMENSIONS}-d)...`);
-    const embeddings = new GeminiEmbeddings({
-      apiKey: GOOGLE_KEY,
+    // --- STEP 1: EMBEDDING (Voyage AI) ---
+    console.log(`Generating Embedding (${EMBEDDING_MODEL}, ${EMBEDDING_DIMENSIONS}-d)...`);
+    const embeddings = new VoyageEmbeddings({
+      apiKey: VOYAGE_KEY,
       model: EMBEDDING_MODEL,
-      outputDimensionality: EMBEDDING_DIMENSIONS,
-      taskType: "RETRIEVAL_QUERY",
+      inputType: "query",
+      // Single request per user; no artificial spacing. Retry-on-429 inside
+      // the class still kicks in if the per-minute window is full.
+      minMsBetweenRequests: 0,
+      maxRetries: 3,
     });
 
     let vector;
     try {
       vector = await embeddings.embedQuery(problem);
     } catch (err: any) {
-      console.error("❌ Google Embedding Failed:", err.message);
+      console.error("Voyage Embedding Failed:", err.message);
       return Response.json({ error: "Embedding service busy." }, { status: 503 });
     }
 
     // --- STEP 2: RETRIEVAL ---
-    console.log("🔍 Searching Knowledge Base...");
+    console.log("Searching Knowledge Base...");
     const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-    
-    // Check if we get results
-    const { data: documents, error } = await supabase.rpc('match_documents', {
+
+    const { data: documents, error } = await supabase.rpc("match_documents", {
       query_embedding: vector,
-      match_threshold: 0.1, 
-      match_count: 10 
+      match_threshold: 0.1,
+      match_count: 10,
     });
 
     if (error) {
@@ -100,36 +107,36 @@ export async function POST(req: Request) {
       throw new Error("Database search failed.");
     }
 
-    // Handle "No Results"
     if (!documents || documents.length === 0) {
       return Response.json({
         recommendation: "Unable to analyze.",
         short_reason: "No relevant frameworks found in your library.",
-        detailed_reasoning: "The system searched your uploaded books but could not find a mental model that applies to this specific problem."
+        detailed_reasoning:
+          "The system searched your uploaded books but could not find a mental model that applies to this specific problem.",
       });
     }
 
     const contextText = documents.map((doc: any) => doc.content).join("\n---\n");
-    console.log(`✅ Found ${documents.length} book chunks.`);
+    console.log(`Found ${documents.length} book chunks.`);
 
     // --- STEP 3: REASONING (Groq) ---
-    console.log("🤖 Asking Groq (Llama 3.1)...");
-    
+    console.log("Asking Groq (Llama 3.1)...");
+
     const model = new ChatGroq({
       apiKey: GROQ_KEY,
       model: "llama-3.1-8b-instant",
-      temperature: 0.1, 
+      temperature: 0.1,
     });
 
     const prompt = PromptTemplate.fromTemplate(`
       You are an expert decision consultant.
-      
+
       User Problem: {problem}
       User Options: {options}
-      
+
       CONTEXT FROM LIBRARY (STRICT):
       {context}
-      
+
       Instructions:
       1. Select one option.
       2. "recommendation": The option text.
@@ -153,14 +160,13 @@ export async function POST(req: Request) {
     });
 
     const response = await model.invoke(formattedPrompt);
-    const rawOutputString = response.content as string; 
-    
-    // --- ROBUST PARSE WITH DEBUGGING ---
+    const rawOutputString = response.content as string;
+
     let result;
     try {
       result = cleanAndParseJSON(rawOutputString);
     } catch (e) {
-      console.error("❌ JSON Parse Failed!");
+      console.error("JSON Parse Failed!");
       console.log("--------------- RAW AI OUTPUT START ---------------");
       console.log(rawOutputString);
       console.log("--------------- RAW AI OUTPUT END -----------------");
@@ -168,9 +174,8 @@ export async function POST(req: Request) {
     }
 
     return Response.json(result);
-
   } catch (e: any) {
-    console.error("❌ CRITICAL ERROR:", e);
+    console.error("CRITICAL ERROR:", e);
     return Response.json({ error: e.message || "Unknown Server Error" }, { status: 500 });
   }
 }
