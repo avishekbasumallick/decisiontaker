@@ -206,9 +206,11 @@ export async function runDecide(input: DecideInput): Promise<DecideResult> {
     .join("\n---\n");
 
   // --- STEP 3: Reasoning (Groq) ---
+  // `llama-3.1-8b-instant` was deprecated by Groq on 2026-08-16; migrated
+  // to the recommended replacement, `openai/gpt-oss-20b`.
   const model = new ChatGroq({
     apiKey: GROQ_KEY,
-    model: "llama-3.1-8b-instant",
+    model: "openai/gpt-oss-20b",
     temperature: 0.1,
   });
 
